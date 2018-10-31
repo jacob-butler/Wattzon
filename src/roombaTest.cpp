@@ -33,70 +33,28 @@ const float PI = 3.14159265359;
 #define STREAM_INDEX    0                 // Defines the stream index, used for multiple streams of the same type //
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-void actionLoop(){
-    std::cout << "Program started" << std::endl;
-    pair<float,float> position(0,0);
-    pair<float,float> checkPointOne(300,0);
-    pair<float,float> checkPointTwo(300,-300);
-    float angle = 0;
-    float angleVelocity = 0;
-    float radius = 75;
-    Roomba roomba("/dev/tty.usbserial-DN0267K3", 115200);
-    //roomba.start(); 
-    float velocity = 150;
-    float distance = 900*900;
-    float lastTime = 0; 
-    roomba.setForward(velocity);
-    auto start = std::chrono::high_resolution_clock::now(); 
-    auto end = std::chrono::high_resolution_clock::now(); 
-    bool checkOne = true;
-    bool checkTwo = false;
-    bool turn = false;
-    while(true){
-        end = std::chrono::high_resolution_clock::now();
-        if(roomba.BumperAndWheels() > 0){
-            roomba.setForward(0);
-            return;
-        } 
-        if(checkOne){
-            if(abs(position.first-checkPointOne.first)<5 && abs(position.second-checkPointOne.second)<5){
-                velocity = 0;
-                turn = true;
-                checkOne = false;
-                angleVelocity = -50;
-                roomba.setForward(0);
-                roomba.turn(angleVelocity);
-            }
-        }
-        if(turn){
-            if(abs(angle) >= 90){
-                roomba.turn(0);
-                turn = false;
-                angleVelocity = 0;
-                checkTwo = true;
-                roomba.setForward(150);
-                velocity = 150;
-            }
-        }
-        if(checkTwo){
-            if(abs(position.first-checkPointTwo.first)<10 && abs(position.second-checkPointTwo.second)<10){
-                velocity = 0;
-                roomba.setForward(0);
-                return;
-            }
+float distanceToTravel(float turnAng){
+    float roombaRadius = 175;
+    float viewDistance = 300;
+    float B = roombaRadius + 2*viewDistance;
+    return B*std::sqrt(abs(std::sin(PI/180*(turnAng))/std::cos(PI/180*(turnAng/2)-1)));
+   
+}
 
-        }
-        float angularVelocity = 180/PI*angleVelocity/radius;
-        auto end = std::chrono::high_resolution_clock::now();    
-        std::chrono::duration<float> diff = end-start; 
-        angle += angularVelocity*(diff.count()-lastTime);
-        position.first += std::cos(angle*3.14159/180)*velocity*(diff.count()-lastTime);
-        position.second += std::sin(angle*3.14159/180)*velocity*(diff.count()-lastTime);
-        std::cout << "angle: " << angle << std::endl;
-        std::cout << "angularVelocity: " << angularVelocity << std::endl;
-        std::cout << "Positions is: " << position.first << ","<< position.second << std::endl;
-        lastTime = diff.count();
-    }
+float turnLeftOrRight(const std::pair<float,float> &roombaPos, const std::pair<float,float> &targetPos, float turnAng, float turnSpeed){ 
+    float distance = distanceToTravel(turnAng);
+    float phi = std::atan2(roombaPos.second,roombaPos.first);
+    std::pair<float,float> leftPoint = roombaPos; 
+    leftPoint.first = targetPos.first - (std::cos(PI/180*(turnAng)+phi)*distance) - leftPoint.first;
+    leftPoint.second = targetPos.second - (std::sin(PI/180*(turnAng)+phi)*distance) - leftPoint.second;
+    float leftDistance = leftPoint.first*leftPoint.first+leftPoint.second*leftPoint.second;
+    std::pair<float,float> rightPoint = roombaPos;
+    rightPoint.first = targetPos.first - (std::cos(PI/180*(-turnAng)+phi)*distance) - rightPoint.first;
+    rightPoint.second = targetPos.second - (std::sin(PI/180*(-turnAng)+phi)*distance) - rightPoint.second;  
+    float rightDistance = rightPoint.first*rightPoint.first+rightPoint.second*rightPoint.second;
+    if(rightDistance < leftDistance)
+        return -abs(turnSpeed);
+    return abs(turnSpeed); 
 }
 
 void stopIfObjectInPath(){
@@ -148,15 +106,25 @@ void stopIfObjectInPath(){
     std::cout << "Program started" << std::endl;
     Roomba roomba("/dev/tty.usbserial-DN0267K3", 115200);
     //roomba.start(); 
-    roomba.setForward(150);
+    roomba.setForward(0);
     auto start = std::chrono::high_resolution_clock::now(); 
     auto end = std::chrono::high_resolution_clock::now(); 
     float lastTime = 0;
+    float startAngle = 0;
+    float endAngle = 0;
+    float distanceToGo = 0;
+    float objectWasNear = false;
+    pair<float,float> previousPosition(0,0); 
+    pair<float,float> positionToBe{3000,000};
+    bool refindingTarget = false;
     while (true)
     {
         // This call waits until a new composite_frame is available
         // composite_frame holds a set of frames. It is used to prevent frame drops
         // The retunred object should be released with rs2_release_frame(...)
+        if(e){
+            std::cout << "Camera Error" << std::endl;
+        } 
         rs2_frame* frames = rs2_pipeline_wait_for_frames(pipeline, 5000, &e);
 
 
@@ -167,6 +135,8 @@ void stopIfObjectInPath(){
         int i;
         for (i = 0; i < num_of_frames; ++i)
         {
+            float directionToTarget = 180/PI*std::atan2(positionToBe.second-roomba.getPosition().second, positionToBe.first-roomba.getPosition().first);
+            
             // The retunred object should be released with rs2_release_frame(...)
             rs2_frame* frame = rs2_extract_frame(frames, i, &e);
 
@@ -196,17 +166,49 @@ void stopIfObjectInPath(){
                 }
             }
             rs2_release_frame(frame);
-
-            // Print the distance
+            cout << "Distance to go: " <<  distanceToGo << endl;
             if(objectNear){
-                roomba.turn(-50);
+                std::cout << refindingTarget << endl;
+                distanceToGo = 0;
+                if(roomba.getTurningVelocity() == 0){
+                    roomba.turn(turnLeftOrRight(roomba.getPosition(),positionToBe,45,50));
+                    startAngle = roomba.getDirection();
+                }
+                objectWasNear = true; 
+            }else{
+                if(objectWasNear){
+                    //cout << roomba.getDirection()-startAngle << endl;
+                    objectWasNear = false;
+                    distanceToGo = distanceToTravel(roomba.getDirection()-startAngle);
+                }
+                if(distanceToGo > 0){
+                    if(roomba.getForwardVelocity() == 0){
+                         roomba.setForward(150);
+                    }else{
+                        pair<float,float> positionToGo(roomba.getPosition().first - previousPosition.first,roomba.getPosition().second - previousPosition.second);
+                        cout << "position to go is: " << roomba.getPosition().first - previousPosition.first 
+                             << "," << roomba.getPosition().second - previousPosition.second 
+                             << endl;
+                        distanceToGo -= std::sqrt(positionToGo.first*positionToGo.first+positionToGo.second*positionToGo.second);
+                    }
+                }else{
+                    if(abs(roomba.getDirection()-directionToTarget) > 1){
+                        refindingTarget = true;
+                        if(roomba.getTurningVelocity() == 0){
+                           roomba.turn(turnLeftOrRight(roomba.getPosition(),positionToBe,45,50));
+                        }
+                    }else{
+                        refindingTarget = false;
+                        if(roomba.getForwardVelocity() == 0){
+                            roomba.setForward(150);
+                        }
+                    }
+                }
+                
             }
-            if(!objectNear && roomba.getTurningVelocity() != 0){
-                roomba.setForward(150);
-            }
-            if(roomba.BumperAndWheels() > 0){
+            if(roomba.BumperAndWheels() > 0 || (abs(roomba.getPosition().first-positionToBe.first)<50 &&
+              (abs(roomba.getPosition().second-positionToBe.second))<50)){              
                 roomba.setForward(0);
-                return;
                 rs2_pipeline_stop(pipeline, &e);
 
                 // Release resources
@@ -216,12 +218,15 @@ void stopIfObjectInPath(){
                 rs2_delete_device(dev);
                 rs2_delete_device_list(device_list);
                 rs2_delete_context(ctx); 
+                return;
             }    
             std::cout << "Is there an object in View: " << objectNear << std::endl;
             auto end = std::chrono::high_resolution_clock::now();    
             std::chrono::duration<float> diff = end-start; 
+            previousPosition = roomba.getPosition();
             roomba.update(diff.count()-lastTime);
-            std::cout << "angle: " << roomba.getDirection() << std::endl;
+            std::cout << "Angle of roomba: " << roomba.getDirection() << std::endl;
+            std::cout << "Direction to target: " << directionToTarget << endl;
             std::cout << "Positions is: " << roomba.getPosition().first << ","<< roomba.getPosition().second << std::endl;
             lastTime = diff.count();
         }
@@ -252,6 +257,7 @@ int main()
     //testingAtan2();
     //actionLoop();
     stopIfObjectInPath();
+    //cout << "We should turn" << turnLeftOrRight(std::pair<float,float>{500,500},std::pair<float,float>{1000,1700},30,50) << std::endl;
     //Roomba roomba("/dev/tty.usbserial-DN0267K3", 115200);
     //std::cout << ((10&0xFF00)>>8) << std::endl;
     //std::cout << ((10&0x00FF)) << std::endl;
