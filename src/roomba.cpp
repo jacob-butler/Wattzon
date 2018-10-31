@@ -17,7 +17,7 @@ void wait(float numberOfNanoSecond){
 }
 
 Roomba::Roomba(std::string port, unsigned int baudRate)
-    :serialPort(port, baudRate),forwardVelocity(0),turningVelocity(0),position(0,0),radius(105){}
+    :serialPort(port, baudRate),forwardVelocity(0),turningVelocity(0),position(0,0),radius(105),direction(0){}
 
 void Roomba::start(){
     serialPort.writeBytes(vector<unsigned char>{128});
@@ -55,6 +55,9 @@ void Roomba::turn(short velocity){
 void Roomba::update(float timeStep){ 
     float angularVelocity = 180/PI*turningVelocity/radius;
     direction += angularVelocity*timeStep;
+    direction = fmod(direction,360);
+    if(direction <= -180) direction = direction+360;
+    if(direction > 180) direction = direction-360;
     position.first += std::cos(direction*PI/180)*forwardVelocity*timeStep;
     position.second += std::sin(direction*PI/180)*forwardVelocity*timeStep;  
 }
